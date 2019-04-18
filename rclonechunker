@@ -97,28 +97,27 @@ function checksum() {
 
 [ "$RCLONE_PURGE_STATE" = "yes" ] && rclone purge ${stateDir}
 
-while true; do
-  while [ $thisChunk -lt $chunkCount ]
-  do
-    echo -n "Chunk #${thisChunk}..."
-    chunkFile="$chunkName/${thisChunk}"
-    doneFile="$stateDir/${thisChunk}.DONE"
-    checksumDone=$(rclone cat "${doneFile}" 2>/dev/null)
-    checksumLocal=$(checksum "$file")
-    if ! [ "$checksumDone" = "$checksumLocal" ]
-    then
-      ((jobCtrl = jobCtrl % parallelOps)); ((jobCtrl++ == 0)) && wait
-      echo "uploading"
-      (dd if="$file" bs=$chunkSize skip=$thisChunk count=1 2>/dev/null | $compressProgram | rclone rcat "$chunkFile" && checksum "$file" | rclone rcat "${doneFile}") &
-    else
-      echo "skipping -- already present"
-    fi
-    ((thisChunk++))
-  done
-  completedChunks=$(rclone ls $localStateDir 2>& /dev/null | wc -l)
-  ((maxRetries--))
-  [ $completedChunks -ge $chunkCount ] && break
-  [ $maxRetries -le 0 ] && break
+while [ $thisChunk -lt $chunkCount ]
+do
+  echo -n "Chunk #${thisChunk}..."
+  chunkFile="$chunkName/${thisChunk}"
+  doneFile="$stateDir/${thisChunk}.DONE"
+  checksumDone=$(rclone cat "${doneFile}" 2>/dev/null)
+  checksumLocal=$(checksum "$file")
+  if ! [ "$checksumDone" = "$checksumLocal" ]
+  then
+    ((jobCtrl = jobCtrl % parallelOps)); ((jobCtrl++ == 0)) && wait
+    echo "uploading"
+    (retries=$maxRetries
+      while [ $retries -gt 0 ]; do
+        dd if="$file" bs=$chunkSize skip=$thisChunk count=1 2>/dev/null | $compressProgram | rclone rcat "$chunkFile" && checksum "$file" | rclone rcat "${doneFile}" && break
+        ((retries--))
+      done
+    ) &
+  else
+    echo "skipping -- already present"
+  fi
+  ((thisChunk++))
 done
 
 echo "DONE!"
