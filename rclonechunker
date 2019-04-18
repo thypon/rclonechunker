@@ -86,8 +86,14 @@ echo "Splitting $file into $chunkCount chunks of $chunkSize bytes and uploading 
 thisChunk=0
 chunkName="$dest/${baseName}$chunkSuffix"
 compressProgram="lz4 -9 -" # use 'cat' for no compression
+checksumProgram="sha256sum"
 localStateDir="$HOME/.rclonechunker/state/" # use '' for remote state
 stateDir="$localStateDir/$chunkName/state"
+
+function checksum() {
+  checksumProgram="sha256sum"
+  dd if="$1" bs=$chunkSize skip=$thisChunk count=1 2>/dev/null | $checksumProgram | awk '{print $1}'
+}
 
 [ "$RCLONE_PURGE_STATE" = "yes" ] && rclone purge ${stateDir}
 
@@ -97,12 +103,13 @@ while true; do
     echo -n "Chunk #${thisChunk}..."
     chunkFile="$chunkName/${thisChunk}"
     doneFile="$stateDir/${thisChunk}.DONE"
-    notDone=$(rclone size "${doneFile}" 2>&1 | egrep -c '(Total size: 0 Bytes|ERROR)')
-    if [ $notDone -eq 1 ]
+    checksumDone=$(rclone cat "${doneFile}" 2>/dev/null)
+    checksumLocal=$(checksum "$file")
+    if ! [ "$checksumDone" = "$checksumLocal" ]
     then
       ((jobCtrl = jobCtrl % parallelOps)); ((jobCtrl++ == 0)) && wait
       echo "uploading"
-      (dd if="$file" bs=$chunkSize skip=$thisChunk count=1 2>/dev/null | $compressProgram | rclone rcat "$chunkFile" && date | rclone rcat "${doneFile}") &
+      (dd if="$file" bs=$chunkSize skip=$thisChunk count=1 2>/dev/null | $compressProgram | rclone rcat "$chunkFile" && checksum "$file" | rclone rcat "${doneFile}") &
     else
       echo "skipping -- already present"
     fi
